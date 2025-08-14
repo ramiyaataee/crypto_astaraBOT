@@ -20,8 +20,7 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8136421090:AAFrb8RI6BQ2tH49YXX_5S3
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '570096331')
 
 PORT = int(os.getenv('PORT', 8080))
-BINANCE_WS_BASE = 'wss://stream.binance.com:443/stream?streams='
-'  # Binance Global
+BINANCE_WS_BASE = 'wss://stream.binance.com:443/stream?streams='  # Binance Global'  # Binance Global
 
 LOG_FILE = 'whalepulse_pro.log'
 
