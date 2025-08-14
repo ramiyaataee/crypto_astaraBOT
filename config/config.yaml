@@ -1,0 +1,12 @@
+﻿telegram:
+  token: '8136421090:AAFrb8RI6BQ2tH49YXX_5S32_W0yWfT04Cg'
+  chat_id: '570096331'
+
+binance:
+  symbols:
+    - BTCUSDT
+    - ETHUSDT
+    - SOLUSDT
+    - XRPUSDT
+    - ADAUSDT
+  websocket_url: 'wss://stream.binance.com:9443/stream?streams=btcusdt@ticker/ethusdt@ticker/solusdt@ticker/xrpusdt@ticker/adausdt@ticker'
