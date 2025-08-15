@@ -4,3 +4,4 @@ requests==2.31.0
 gunicorn==20.1.0
 tenacity==8.2.2
 websockets==10.4
+python-telegram-bot==13.7
