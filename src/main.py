@@ -4,7 +4,6 @@ import logging
 import random
 import time
 import os
-import csv
 from datetime import datetime, timedelta
 import requests
 import tenacity
@@ -13,22 +12,18 @@ from threading import Thread
 import websockets
 
 # ======== تنظیمات ========
-SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT']
+SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT', 'USDTDUSDT', 'BTBUSDT', 'TOTALUSDT', 'TOTAL2USDT', 'TOTAL3USDT']
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8136421090:AAFrb8RI6BQ2tH49YXX_5S32_W0yWfT04Cg')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '570096331')
 PORT = int(os.getenv('PORT', 10000))
 BINANCE_WS_BASE = 'wss://testnet.binance.vision/ws/'  # تست‌نت برای جلوگیری از خطای نرخ
 LOG_FILE = 'whalepulse_pro.log'
-REPORT_INTERVAL = 15 * 60         # 15 دقیقه
+REPORT_INTERVAL = 15 * 60       # 15 دقیقه
 HOURLY_REPORT_INTERVAL = 60 * 60  # 1 ساعت
-MIN_CHANGE_PERCENT = 0.1          # 0.1%
-MIN_CHANGE_VOLUME = 0.01          # 1%
+MIN_CHANGE_PERCENT = 0.1        # 0.1% تغییر قیمت
+MIN_CHANGE_VOLUME = 0.01        # 1% تغییر حجم
 RETRY_ATTEMPTS = 3
 RETRY_DELAY = 5
-ALERT_THRESHOLD = float(os.getenv('ALERT_THRESHOLD', '5'))  # درصد تغییر برای هشدار
-ALERT_COOLDOWN = int(os.getenv('ALERT_COOLDOWN', '900'))    # ثانیه
-CSV_FILE = os.getenv('CSV_FILE', 'market_data.csv')
-CSV_SAVE_INTERVAL = int(os.getenv('CSV_SAVE_INTERVAL', '30'))  # ثانیه
 
 # متغیرهای گلوبال
 last_report_time = 0
@@ -42,9 +37,6 @@ app_status = {
     'last_telegram_send': None,
     'uptime_start': datetime.now()
 }
-market_state = {}
-last_alert_time = {}
-last_csv_write = {}
 
 # ======== لاگ ========
 logging.basicConfig(
@@ -75,8 +67,7 @@ def home():
     <a href="/status">📊 JSON Status</a> | 
     <a href="/health">🏥 Health Check</a> | 
     <a href="/healthz">🏥 Healthz Check</a> | 
-    <a href="/test">🧪 Test Telegram</a> | 
-    <a href="/dashboard">📈 Live Dashboard</a>
+    <a href="/test">🧪 Test Telegram</a>
     """
 
 @app.route('/health')
@@ -97,9 +88,7 @@ def status():
         **app_status,
         'uptime_start': app_status['uptime_start'].isoformat(),
         'symbols': SYMBOLS,
-        'telegram_configured': bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
-        'alert_threshold': ALERT_THRESHOLD,
-        'alert_cooldown_sec': ALERT_COOLDOWN
+        'telegram_configured': bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
     })
 
 @app.route('/test')
@@ -122,74 +111,6 @@ def ping():
         'timestamp': app_status['last_ping'],
         'status': app_status['status']
     })
-
-@app.route('/api/market')
-def api_market():
-    return jsonify(market_state)
-
-@app.route('/dashboard')
-def dashboard():
-    return """
-<!DOCTYPE html>
-<html lang="fa">
-<head>
-<meta charset="utf-8">
-<title>WhalePulse-Pro Dashboard</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  body{font-family:Arial,Segoe UI,Tahoma,sans-serif;background:#0e0f12;color:#e5e7eb;margin:0;padding:24px}
-  h1{margin:0 0 12px 0}
-  .sub{color:#9ca3af;margin-bottom:20px}
-  table{width:100%;border-collapse:collapse;background:#111318;border-radius:12px;overflow:hidden}
-  th,td{padding:12px 10px;border-bottom:1px solid #1f2430;text-align:center}
-  th{background:#151923;color:#cbd5e1;font-weight:600}
-  tr:hover{background:#151823}
-  .up{color:#16a34a;font-weight:700}
-  .down{color:#ef4444;font-weight:700}
-  .muted{color:#9ca3af}
-  .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#1f2430;color:#cbd5e1;font-size:12px}
-  .rowhead{display:flex;gap:8px;align-items:center;justify-content:center}
-</style>
-</head>
-<body>
-  <h1>🐋 WhalePulse-Pro Dashboard</h1>
-  <div class="sub">Live prices &amp; 24h change • auto-refresh</div>
-  <div id="meta" class="sub"></div>
-  <table>
-    <thead>
-      <tr><th>Symbol</th><th>Price</th><th>Volume</th><th>Change 24h</th><th>Updated</th></tr>
-    </thead>
-    <tbody id="tbody"></tbody>
-  </table>
-<script>
-async function load(){
-  const res = await fetch('/api/market');
-  const data = await res.json();
-  const tbody = document.getElementById('tbody');
-  let html = '';
-  const symbols = Object.keys(data).sort();
-  for(const sym of symbols){
-    const d = data[sym];
-    const cls = (d.price_change_percent || 0) >= 0 ? 'up':'down';
-    const price = Number(d.price||0);
-    let pstr = '$' + (['BTCUSDT','ETHUSDT'].includes(sym) ? price.toFixed(0) : price.toFixed(2));
-    html += `<tr>
-      <td class="rowhead"><span class="pill">${sym}</span></td>
-      <td>${pstr}</td>
-      <td>${Number(d.volume||0).toLocaleString('en-US')}</td>
-      <td class="${cls}">${Number(d.price_change_percent||0).toFixed(2)}%</td>
-      <td class="muted">${(d.updated_at||'').replace('T',' ').split('.')[0]}</td>
-    </tr>`;
-  }
-  tbody.innerHTML = html || '<tr><td colspan="5" class="muted">Waiting for data...</td></tr>';
-  document.getElementById('meta').textContent = `Symbols: ${symbols.join(', ')}`;
-}
-load();
-setInterval(load, 3000);
-</script>
-</body>
-</html>
-    """
 
 # ======== Telegram Functions ========
 def test_telegram_bot():
@@ -225,30 +146,36 @@ def send_to_telegram(message: str):
         'parse_mode': 'HTML',
         'disable_web_page_preview': True
     }
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        if response.status_code == 200:
-            app_status['last_telegram_send'] = datetime.now().isoformat()
-            logger.info('✅ پیام تلگرام ارسال شد.')
-            return True
-        else:
-            error_msg = f'❌ Telegram failed {response.status_code}: {response.text}'
-            logger.error(error_msg)
-            raise Exception(error_msg)
-    except Exception as e:
-        logger.error(f'❌ Telegram exception: {e}')
-        raise
+    
+    response = requests.post(url, json=payload, timeout=10)
+    if response.status_code == 200:
+        app_status['last_telegram_send'] = datetime.now().isoformat()
+        logger.info('✅ پیام تلگرام ارسال شد.')
+        return True
+    else:
+        error_msg = f'❌ Telegram failed {response.status_code}: {response.text}'
+        logger.error(error_msg)
+        raise Exception(error_msg)
 
-# ======== ابزارها ========
+# ======== WebSocket Functions ========
+def build_stream_path(symbols):
+    parts = [s.lower() + '@ticker' for s in symbols]
+    return [f'{BINANCE_WS_BASE}{part}' for part in parts]  # جدا کردن به تک‌نمادها
+
 def get_symbol_info(symbol):
-    mapping = {
-        'BTCUSDT': {'name': '₿ Bitcoin', 'emoji': '₿'},
-        'ETHUSDT': {'name': '⟠ Ethereum', 'emoji': '⟠'},
-        'SOLUSDT': {'name': '◎ Solana', 'emoji': '◎'},
-        'XRPUSDT': {'name': '⨯ Ripple', 'emoji': '⨯'},
-        'ADAUSDT': {'name': '₳ Cardano', 'emoji': '₳'}
+    symbol_info = {
+        'BTCUSDT': {'name': '₿ Bitcoin', 'emoji': '₿', 'category': 'Major'},
+        'ETHUSDT': {'name': '⟠ Ethereum', 'emoji': '⟠', 'category': 'Major'},
+        'SOLUSDT': {'name': '◎ Solana', 'emoji': '◎', 'category': 'Major'},
+        'XRPUSDT': {'name': '⨯ Ripple', 'emoji': '⨯', 'category': 'Major'},
+        'ADAUSDT': {'name': '₳ Cardano', 'emoji': '₳', 'category': 'Major'},
+        'USDTDUSDT': {'name': '📊 USDT Dominance', 'emoji': '📊', 'category': 'Index'},
+        'BTBUSDT': {'name': '🔥 BTB Token', 'emoji': '🔥', 'category': 'Index'},
+        'TOTALUSDT': {'name': '📈 Total Market Cap', 'emoji': '📈', 'category': 'Index'},
+        'TOTAL2USDT': {'name': '📊 Total2 (Altcoins)', 'emoji': '📊', 'category': 'Index'},
+        'TOTAL3USDT': {'name': '📉 Total3 (Others)', 'emoji': '📉', 'category': 'Index'}
     }
-    return mapping.get(symbol, {'name': symbol, 'emoji': '💰'})
+    return symbol_info.get(symbol, {'name': symbol, 'emoji': '💰', 'category': 'Other'})
 
 def format_symbol_link(symbol):
     base_symbol = symbol.replace('USDT', '')
@@ -257,85 +184,96 @@ def format_symbol_link(symbol):
     return binance_link, tradingview_link
 
 def format_price(symbol, price):
-    if symbol in ['BTCUSDT', 'ETHUSDT']:
+    if symbol in ['USDTDUSDT', 'TOTALUSDT', 'TOTAL2USDT', 'TOTAL3USDT']:
+        return f"{price:.2f}%"
+    elif symbol == 'ETHBTC':
+        return f"{price:.6f}"
+    elif symbol in ['BTCUSDT']:
         return f"${price:,.0f}"
-    elif symbol in ['SOLUSDT', 'ADAUSDT', 'XRPUSDT']:
+    elif symbol in ['ETHUSDT']:
+        return f"${price:,.0f}"
+    elif symbol in ['SOLUSDT', 'XRPUSDT', 'ADAUSDT']:
         return f"${price:.2f}"
-    return f"${price:.4f}"
-
-def build_report_message(data):
-    now_str = (datetime.now() + timedelta(hours=3.5)).strftime('%Y-%m-%d %H:%M:%S')
-    header = f"🐋 <b>WhalePulse-Pro Market Report</b>\n⏰ {now_str} (+03:30)\n\n"
-    sections = []
-    for sym, vals in data.items():
-        info = get_symbol_info(sym)
-        arrow = "📈" if vals['price_change_percent'] >= 0 else "📉"
-        percent_str = f"{vals['price_change_percent']:+.2f}%"
-        binance_link, tradingview_link = format_symbol_link(sym)
-        sections.append(
-            f"{info['emoji']} <b>{info['name']}</b>\n"
-            f"💵 {format_price(sym, vals['price'])}\n"
-            f"📊 Vol: {vals['volume']:,.0f}\n"
-            f"{arrow} {percent_str}\n"
-            f"🔗 <a href='{binance_link}'>Trade</a> | <a href='{tradingview_link}'>Chart</a>\n"
-        )
-    footer = "\n🤖 <i>WhalePulse-Pro | Market Intelligence</i>"
-    message = header + "\n".join(sections) + footer
-    if len(message) > 4000:
-        message = message[:3900] + "...\n\n📝 <i>Message truncated</i>"
-    return message
+    else:
+        return f"${price:.4f}"
 
 def should_send_report(new_data):
     global last_report_data
     if not last_report_data:
         return True
+    
     for sym, vals in new_data.items():
         last_vals = last_report_data.get(sym)
         if not last_vals:
             return True
+        
         price_diff = abs(vals['price_change_percent'] - last_vals['price_change_percent'])
         if price_diff >= MIN_CHANGE_PERCENT:
             logger.info(f"Price change detected for {sym}: {price_diff:.2f}%")
             return True
+        
         if last_vals['volume'] > 0:
             volume_diff = abs(vals['volume'] - last_vals['volume']) / last_vals['volume']
             if volume_diff >= MIN_CHANGE_VOLUME:
                 logger.info(f"Volume change detected for {sym}: {volume_diff:.2%}")
                 return True
+    
     return False
 
-def ensure_csv_header():
-    if not os.path.exists(CSV_FILE):
-        try:
-            with open(CSV_FILE, 'w', newline='', encoding='utf-8') as f:
-                w = csv.writer(f)
-                w.writerow(['timestamp', 'symbol', 'price', 'volume', 'price_change_percent'])
-        except Exception as e:
-            logger.error(f"❌ Failed to create CSV header: {e}")
-
-def append_csv_row(symbol, price, volume, change_percent):
-    try:
-        ensure_csv_header()
-        with open(CSV_FILE, 'a', newline='', encoding='utf-8') as f:
-            w = csv.writer(f)
-            w.writerow([datetime.now().isoformat(), symbol, price, volume, change_percent])
-    except Exception as e:
-        logger.error(f"❌ Failed to write CSV: {e}")
-
-def maybe_save_csv(symbol, price, volume, change_percent, now_ts):
-    last = last_csv_write.get(symbol, 0)
-    if now_ts - last >= CSV_SAVE_INTERVAL:
-        append_csv_row(symbol, price, volume, change_percent)
-        last_csv_write[symbol] = now_ts
-
-def maybe_alert(symbol, price, change_percent, now_ts):
-    if abs(change_percent) >= ALERT_THRESHOLD:
-        last = last_alert_time.get(symbol, 0)
-        if now_ts - last >= ALERT_COOLDOWN:
-            msg = (f"🚨 <b>ALERT</b>: {symbol} {change_percent:+.2f}%\n"
-                   f"💵 Price: {format_price(symbol, price)}")
-            send_to_telegram(msg)
-            last_alert_time[symbol] = now_ts
+def build_report_message(data):
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    header = f"🐋 <b>WhalePulse-Pro Market Report</b>\n⏰ {now_str}\n\n"
+    
+    major_coins = []
+    indices = []
+    
+    for sym, vals in data.items():
+        info = get_symbol_info(sym)
+        category = info['category']
+        
+        if category == 'Major':
+            major_coins.append((sym, vals, info))
+        elif category == 'Index':
+            indices.append((sym, vals, info))
+    
+    sections = []
+    
+    if major_coins:
+        sections.append("💰 <b>Major Cryptocurrencies</b>")
+        for sym, vals, info in major_coins:
+            arrow = "📈" if vals['price_change_percent'] >= 0 else "📉"
+            percent_str = f"+{vals['price_change_percent']:.2f}%" if vals['price_change_percent'] >= 0 else f"{vals['price_change_percent']:.2f}%"
+            binance_link, tradingview_link = format_symbol_link(sym)
+            formatted_price = format_price(sym, vals['price'])
+            section = (
+                f"{info['emoji']} <b>{info['name']}</b>\n"
+                f"💵 {formatted_price}\n"
+                f"📊 Vol: {vals['volume']:,.0f}\n"
+                f"{arrow} {percent_str}\n"
+                f"🔗 <a href='{binance_link}'>Trade</a> | <a href='{tradingview_link}'>Chart</a>\n"
+            )
+            sections.append(section)
+    
+    if indices:
+        sections.append("\n📊 <b>Market Indices</b>")
+        for sym, vals, info in indices:
+            arrow = "📈" if vals['price_change_percent'] >= 0 else "📉"
+            percent_str = f"+{vals['price_change_percent']:.2f}%" if vals['price_change_percent'] >= 0 else f"{vals['price_change_percent']:.2f}%"
+            formatted_price = format_price(sym, vals['price'])
+            section = (
+                f"{info['emoji']} <b>{info['name']}</b>\n"
+                f"📈 {formatted_price}\n"
+                f"{arrow} {percent_str}\n"
+            )
+            sections.append(section)
+    
+    footer = "\n🤖 <i>WhalePulse-Pro | Market Intelligence</i>"
+    message = header + "\n".join(sections) + footer
+    
+    if len(message) > 4000:
+        message = message[:3900] + "...\n\n📝 <i>Message truncated</i>"
+    
+    return message
 
 # ======== WebSocket Handler ========
 @tenacity.retry(
@@ -347,11 +285,12 @@ def maybe_alert(symbol, price, change_percent, now_ts):
 async def connect_and_run(uri):
     global last_report_time, last_hourly_report_time, last_report_data
     logger.info(f'🔌 Connecting to {uri}')
+    
     try:
         async with websockets.connect(
-            uri,
-            ping_interval=30,
-            ping_timeout=10,
+            uri, 
+            ping_interval=30, 
+            ping_timeout=10, 
             max_size=None,
             close_timeout=5
         ) as ws:
@@ -360,7 +299,7 @@ async def connect_and_run(uri):
             logger.info('✅ WebSocket connected successfully')
             current_data = {}
             message_count = 0
-
+            
             async for message in ws:
                 try:
                     message_count += 1
@@ -368,62 +307,52 @@ async def connect_and_run(uri):
                     app_status['last_message_time'] = datetime.now().isoformat()
                     msg = json.loads(message)
                     data = msg.get('data') or msg
-                    if not isinstance(data, dict) or data.get('e') != '24hrTicker':
-                        continue
-
-                    symbol = data.get('s')
-                    if symbol not in SYMBOLS:
-                        continue
-
-                    volume = float(data.get('v', 0))
-                    price = float(data.get('c', 0))
-                    price_change_percent = float(data.get('P', 0))
-                    now_ts = time.time()
-
-                    market_state[symbol] = {
-                        'price': price,
-                        'volume': volume,
-                        'price_change_percent': price_change_percent,
-                        'updated_at': datetime.now().isoformat()
-                    }
-
-                    current_data[symbol] = {
-                        'volume': volume,
-                        'price': price,
-                        'price_change_percent': price_change_percent
-                    }
-
-                    maybe_save_csv(symbol, price, volume, price_change_percent, now_ts)
-                    maybe_alert(symbol, price, price_change_percent, now_ts)
-
-                    if len(current_data) >= len(SYMBOLS):
-                        if now_ts - last_report_time >= REPORT_INTERVAL and should_send_report(current_data):
-                            try:
-                                message_text = build_report_message(current_data)
-                                if send_to_telegram(message_text):
-                                    last_report_data = current_data.copy()
-                                    last_report_time = now_ts
-                                    logger.info("📊 گزارش 15 دقیقه ارسال شد")
-                            except Exception as e:
-                                logger.error(f"❌ Error sending 15min report: {e}")
-
-                        if now_ts - last_hourly_report_time >= HOURLY_REPORT_INTERVAL:
+                    
+                    if data and data.get('e') == '24hrTicker':
+                        symbol = data.get('s') or data.get('symbol')
+                        if not symbol or symbol not in SYMBOLS:
+                            continue
+                            
+                        volume = float(data.get('v') or data.get('volume') or 0)
+                        price = float(data.get('c') or data.get('close') or 0)
+                        price_change_percent = float(data.get('P') or data.get('priceChangePercent') or 0)
+                        
+                        current_data[symbol] = {
+                            'volume': volume,
+                            'price': price,
+                            'price_change_percent': price_change_percent
+                        }
+                        
+                        if message_count % 100 == 0:
+                            logger.info(f"Processed {message_count} messages. Current symbols: {len(current_data)}")
+                        
+                        now = time.time()
+                        if len(current_data) >= len(SYMBOLS) and now - last_report_time >= REPORT_INTERVAL:
+                            if should_send_report(current_data):
+                                try:
+                                    message_text = build_report_message(current_data)
+                                    if send_to_telegram(message_text):
+                                        last_report_data = current_data.copy()
+                                        last_report_time = now
+                                        logger.info("📊 گزارش 15 دقیقه ارسال شد")
+                                except Exception as e:
+                                    logger.error(f"❌ Error sending 15min report: {e}")
+                        
+                        if len(current_data) >= len(SYMBOLS) and now - last_hourly_report_time >= HOURLY_REPORT_INTERVAL:
                             try:
                                 logger.info("📊 ارسال گزارش ساعتی...")
                                 message_text = build_report_message(current_data)
                                 send_to_telegram(message_text)
-                                last_hourly_report_time = now_ts
+                                last_hourly_report_time = now
                                 logger.info("✅ گزارش ساعتی ارسال شد")
                             except Exception as e:
                                 logger.error(f"❌ Error sending hourly report: {e}")
-
-                    if message_count % 200 == 0:
-                        logger.info(f"Processed {message_count} WS messages. Symbols tracked: {len(current_data)}")
-
+                
                 except json.JSONDecodeError as e:
                     logger.warning(f'JSON decode error: {e}')
                 except Exception as e:
                     logger.error(f'❌ Error processing WS message: {e}')
+                    
     except Exception as e:
         app_status['websocket_connected'] = False
         app_status['status'] = 'error'
@@ -431,28 +360,26 @@ async def connect_and_run(uri):
         raise
 
 # ======== WebSocket Loop ========
-def build_stream_path(symbols):
-    return [f'{BINANCE_WS_BASE}{s.lower()}@ticker' for s in symbols]  # تک‌نمادی
-
 async def watcher_loop():
-    uris = build_stream_path(SYMBOLS)
+    uris = build_stream_path(SYMBOLS)  # لیست URLهای تک‌نمادی
     attempt = 0
     max_attempts = 50
-
+    
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         if test_telegram_bot():
             logger.info("✅ Telegram bot verified")
         else:
             logger.warning("⚠️ Telegram bot verification failed")
-
+    
     while attempt < max_attempts:
         try:
             attempt += 1
             backoff = min(300, (2 ** min(attempt, 8))) + random.uniform(0, 5)
             logger.info(f'🔄 Connection attempt {attempt}/{max_attempts}, backoff {backoff:.1f}s')
-            tasks = [connect_and_run(uri) for uri in uris]
+            
+            tasks = [connect_and_run(uri) for uri in uris]  # اجرای موازی برای هر نماد
             await asyncio.gather(*tasks, return_exceptions=True)
-            attempt = 0
+            
         except KeyboardInterrupt:
             logger.info("👋 Interrupted by user")
             break
@@ -460,12 +387,16 @@ async def watcher_loop():
             app_status['websocket_connected'] = False
             app_status['status'] = f'reconnecting_attempt_{attempt}'
             logger.error(f'💥 WebSocket error: {e}')
+            
             if attempt >= max_attempts:
                 app_status['status'] = 'failed_max_attempts'
                 logger.error("❌ Max reconnection attempts reached!")
                 break
+                
             logger.info(f'⏳ Waiting {backoff:.1f}s before reconnect...')
             await asyncio.sleep(backoff)
+        else:
+            attempt = 0  # Reset on successful connection
 
 # ======== Background Thread ========
 def run_websocket_loop():
@@ -488,15 +419,16 @@ if __name__ == "__main__":
     logger.info(f"📊 Monitoring: {SYMBOLS}")
     logger.info(f"📱 Telegram configured: {bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)}")
     logger.info(f"🚀 Port: {PORT}")
+    
     app_status['status'] = 'flask_starting'
+    
     try:
-        ensure_csv_header()
         app.run(
-            host='0.0.0.0',
-            port=PORT,
-            debug=False,
+            host='0.0.0.0', 
+            port=PORT, 
+            debug=False, 
             threaded=True,
-            use_reloader=False
+            use_reloader=False  # Important for Render
         )
     except Exception as e:
         logger.error(f"💥 Flask startup error: {e}")
